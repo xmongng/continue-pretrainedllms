@@ -1,0 +1,20 @@
+{"text": "A causal language model reads a sequence from left to right. At each position, it predicts the token that follows the tokens it has already seen."}
+{"text": "A tokenizer converts text into integer token identifiers. The same tokenizer must be used during training, evaluation, and generation."}
+{"text": "Continued pretraining adapts an existing base model to a new collection of text. The objective remains next-token prediction."}
+{"text": "A training split is used to update model parameters. A validation split is kept separate and is used to estimate performance on unseen documents."}
+{"text": "Data leakage occurs when the same document appears in both training and validation data. Deduplication should happen before the dataset is split."}
+{"text": "A batch contains several token sequences processed together. Larger batches can produce stable gradients, but they also require more memory."}
+{"text": "Gradient accumulation simulates a larger batch. The optimizer updates the model only after gradients from several smaller batches have been accumulated."}
+{"text": "The learning rate controls the size of each optimization update. A rate that is too large can damage pretrained knowledge, while a very small rate can make adaptation slow."}
+{"text": "A checkpoint stores model weights, optimizer state, scheduler state, and training progress. It allows an interrupted experiment to resume."}
+{"text": "Perplexity is derived from the average language-model loss. Lower perplexity indicates that the model assigns higher probability to the held-out text."}
+{"text": "A reproducible experiment records the model revision, dataset version, random seed, package versions, hardware, and training configuration."}
+{"text": "Padding makes variable-length examples fit into one batch. Padding positions use a label of minus one hundred so they do not contribute to the loss."}
+{"text": "An end-of-sequence token marks a document boundary. It helps the model learn that one document has finished before another document begins."}
+{"text": "Long documents are divided into chunks that fit the context window. Each chunk should contain at least two tokens for next-token prediction."}
+{"text": "Evaluation data must not update model weights. It is used only to calculate metrics and compare experiments."}
+{"text": "Python functions keep reusable operations in named blocks. Clear function names make a training pipeline easier to test and maintain."}
+{"text": "def add_numbers(first, second):\n    result = first + second\n    return result"}
+{"text": "A unit test supplies a known input and checks the resulting output. Useful tests focus on behavior that could fail during future changes."}
+{"text": "Configuration files separate experiment settings from program logic. This makes it easier to repeat a run with different models or hyperparameters."}
+{"text": "Before training a large model, run a tiny smoke test. A smoke test confirms that loading, tokenization, batching, loss calculation, evaluation, and saving all work together."}

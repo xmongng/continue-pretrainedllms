@@ -1,0 +1,40 @@
+{
+  "model": {
+    "name_or_path": "sshleifer/tiny-gpt2",
+    "revision": "main",
+    "trust_remote_code": false,
+    "use_fast_tokenizer": true
+  },
+  "data": {
+    "source": "data/examples/corpus.jsonl",
+    "cache_dir": "data/cache/smoke",
+    "text_column": "text",
+    "json_field": null,
+    "validation_fraction": 0.2,
+    "seed": 42,
+    "max_length": 64,
+    "test_fraction": 0.2,
+    "group_column": null,
+    "source_column": null
+  },
+  "training": {
+    "output_dir": "outputs/smoke",
+    "overwrite_output_dir": false,
+    "seed": 42,
+    "max_steps": 2,
+    "learning_rate": 0.00005,
+    "per_device_train_batch_size": 1,
+    "per_device_eval_batch_size": 1,
+    "gradient_accumulation_steps": 1,
+    "eval_strategy": "steps",
+    "eval_steps": 1,
+    "save_strategy": "steps",
+    "save_steps": 1,
+    "logging_steps": 1,
+    "report_to": "none"
+  },
+  "runtime": {
+    "precision": "fp32",
+    "allow_tf32": false
+  }
+}
