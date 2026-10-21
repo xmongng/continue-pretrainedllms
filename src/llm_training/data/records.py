@@ -45,3 +45,17 @@ def iter_json_records(filename: str | Path, json_field: str | None = None):
         if not isinstance(row, dict):
             raise TypeError(f"Expected a JSON object at {path}, item {index}")
         yield row
+
+
+def training_text(row: dict, columns: list[str], location: str) -> tuple[str, str]:
+    """Return the first populated configured text field and its column name."""
+
+    for column in columns:
+        value = row.get(column)
+        if isinstance(value, str) and value.strip():
+            return value, column
+    present = {column: type(row[column]).__name__ for column in columns if column in row}
+    raise ValueError(
+        f"No nonempty training text in {location}; expected one of {columns!r}, "
+        f"present types: {present!r}"
+    )

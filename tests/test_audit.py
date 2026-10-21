@@ -15,7 +15,7 @@ from llm_training.training.audit import (
     export_metrics,
     training_plan,
 )
-from llm_training.data.records import iter_json_records
+from llm_training.data.records import iter_json_records, training_text
 
 
 class AuditTests(unittest.TestCase):
@@ -31,6 +31,17 @@ class AuditTests(unittest.TestCase):
                 for row in rows:
                     stream.write(json.dumps(row) + "\n")
             self.assertEqual(list(iter_json_records(path)), rows)
+
+    def test_training_text_supports_explicit_schema_fallback(self):
+        columns = ["full_text", "full_paper"]
+        self.assertEqual(
+            training_text({"full_text": "new"}, columns, "row 1"), ("new", "full_text")
+        )
+        self.assertEqual(
+            training_text({"full_paper": "core"}, columns, "row 2"), ("core", "full_paper")
+        )
+        with self.assertRaisesRegex(ValueError, "expected one of"):
+            training_text({"full_text": "", "title": "metadata"}, columns, "row 3")
 
     def test_step_rounding_and_explicit_budget(self):
         config = {

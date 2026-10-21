@@ -89,6 +89,19 @@ def load_config(path: str | Path) -> dict[str, Any]:
         raise ValueError("'data.text_column' must be a nonempty string")
     data["text_column"] = text_column
 
+    text_column_fallbacks = data.get("text_column_fallbacks", [])
+    if (
+        not isinstance(text_column_fallbacks, list)
+        or any(not isinstance(value, str) or not value.strip() for value in text_column_fallbacks)
+        or text_column in text_column_fallbacks
+        or len(text_column_fallbacks) != len(set(text_column_fallbacks))
+    ):
+        raise ValueError(
+            "'data.text_column_fallbacks' must contain unique nonempty strings "
+            "different from data.text_column"
+        )
+    data["text_column_fallbacks"] = text_column_fallbacks
+
     validation_fraction = data.get("validation_fraction", 0.01)
     if not isinstance(validation_fraction, (int, float)) or isinstance(validation_fraction, bool):
         raise TypeError("'data.validation_fraction' must be a number")

@@ -14,7 +14,7 @@ from datasets import Dataset, DatasetDict, load_from_disk
 from filelock import FileLock
 
 from llm_training.data.dataset import discover_data_files
-from llm_training.data.records import iter_json_records
+from llm_training.data.records import iter_json_records, training_text
 
 
 def write_json(path, value):
@@ -106,6 +106,7 @@ def prepare_artifacts(data, tokenizer):
             k: data.get(k)
             for k in (
                 "text_column",
+                "text_column_fallbacks",
                 "json_field",
                 "group_column",
                 "source_column",
@@ -138,6 +139,7 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
     selected_files = []
     group_counts = Counter()
     text_column = data["text_column"]
+    text_columns = [text_column, *data.get("text_column_fallbacks", [])]
     group_column = data.get("group_column")
     source_column = data.get("source_column")
     remaining = data.get("max_documents")
@@ -147,12 +149,10 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
         if remaining is not None:
             rows = islice(rows, remaining)
         for row_number, row in enumerate(rows, start=1):
-            for column in filter(None, (text_column, group_column, source_column)):
+            for column in filter(None, (group_column, source_column)):
                 if column not in row:
                     raise ValueError(f"Missing column {column!r} in {file}, record {row_number}")
-            text = row[text_column]
-            if not isinstance(text, str) or not text.strip():
-                raise ValueError(f"Empty/non-string text in {file}, record {row_number}")
+            text, _ = training_text(row, text_columns, f"{file}, record {row_number}")
             key = (
                 str(row[group_column])
                 if group_column
@@ -192,7 +192,9 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
             for file_number, file, row_count in selected_files:
                 rows = islice(iter_json_records(file, data.get("json_field")), row_count)
                 for row_number, row in enumerate(rows):
-                    text = row[text_column]
+                    text, used_text_column = training_text(
+                        row, text_columns, f"{file}, record {row_number + 1}"
+                    )
                     digest = hashlib.sha256(text.encode()).hexdigest()
                     key = str(row[group_column]) if group_column else digest
                     split = assignment[key]
@@ -217,6 +219,7 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
                                 "source": origin,
                                 "split": split,
                                 "tokens_with_eos": len(ids),
+                                "text_column": used_text_column,
                             },
                             ensure_ascii=False,
                         )

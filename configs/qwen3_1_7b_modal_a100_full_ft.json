@@ -4,6 +4,7 @@
     "source": "/data/corpus/data",
     "cache_dir": "/data/cache",
     "text_column": "full_text",
+    "text_column_fallbacks": ["full_paper"],
     "source_column": null,
     "max_length": 2048,
     "validation_fraction": 0.001,

@@ -3,37 +3,24 @@
 from __future__ import annotations
 
 import argparse
-import gzip
 import json
 from pathlib import Path
 
 from llm_training.config import load_config
 from llm_training.data.dataset import discover_data_files
+from llm_training.data.records import iter_json_records, training_text
 from llm_training.training.train import load_tokenizer
 
 
-def count_shard(filename, tokenizer, text_column, batch_size):
+def count_shard(filename, tokenizer, text_columns, batch_size):
     documents = 0
     tokens = 0
     batch = []
-    with gzip.open(filename, "rt", encoding="utf-8") as stream:
-        for line_number, line in enumerate(stream, 1):
-            row = json.loads(line)
-            text = row.get(text_column)
-            if not isinstance(text, str) or not text.strip():
-                raise ValueError(f"Empty/non-string {text_column} at {filename}:{line_number}")
-            batch.append(text)
-            documents += 1
-            if len(batch) == batch_size:
-                encoded = tokenizer(
-                    batch,
-                    add_special_tokens=False,
-                    truncation=False,
-                    return_attention_mask=False,
-                )
-                tokens += sum(map(len, encoded["input_ids"]))
-                batch.clear()
-        if batch:
+    for line_number, row in enumerate(iter_json_records(filename), 1):
+        text, _ = training_text(row, text_columns, f"{filename}:{line_number}")
+        batch.append(text)
+        documents += 1
+        if len(batch) == batch_size:
             encoded = tokenizer(
                 batch,
                 add_special_tokens=False,
@@ -41,6 +28,15 @@ def count_shard(filename, tokenizer, text_column, batch_size):
                 return_attention_mask=False,
             )
             tokens += sum(map(len, encoded["input_ids"]))
+            batch.clear()
+    if batch:
+        encoded = tokenizer(
+            batch,
+            add_special_tokens=False,
+            truncation=False,
+            return_attention_mask=False,
+        )
+        tokens += sum(map(len, encoded["input_ids"]))
     return {"documents": documents, "text_tokens": tokens, "tokens_with_eos": tokens + documents}
 
 
@@ -58,6 +54,7 @@ def main():
     if any(not filename.endswith(".jsonl.gz") for filename in files):
         raise ValueError("This counting command expects psychology JSONL.GZ shards")
     tokenizer = load_tokenizer(config["model"])
+    text_columns = [data["text_column"], *data.get("text_column_fallbacks", [])]
     # This command intentionally does not initialize a Trainer or load model weights.
     report = {
         "model": config["model"]["name_or_path"],
@@ -65,6 +62,7 @@ def main():
         "resolved_tokenizer_commit": tokenizer.init_kwargs.get("_commit_hash"),
         "source": data["source"],
         "text_column": data["text_column"],
+        "text_column_fallbacks": data["text_column_fallbacks"],
         "eos_token_id": tokenizer.eos_token_id,
         "documents": 0,
         "text_tokens": 0,
@@ -72,7 +70,7 @@ def main():
         "shards": [],
     }
     for index, filename in enumerate(files, 1):
-        counts = count_shard(filename, tokenizer, data["text_column"], args.batch_size)
+        counts = count_shard(filename, tokenizer, text_columns, args.batch_size)
         report["shards"].append({"file": Path(filename).name, **counts})
         for key in ("documents", "text_tokens", "tokens_with_eos"):
             report[key] += counts[key]
