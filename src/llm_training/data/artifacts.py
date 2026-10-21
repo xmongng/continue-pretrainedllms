@@ -10,12 +10,22 @@ import time
 from collections import Counter, defaultdict
 from itertools import islice
 from pathlib import Path
+from typing import NamedTuple
 
 from datasets import Dataset, DatasetDict, load_from_disk
 from filelock import FileLock
 
 from llm_training.data.dataset import discover_data_files
 from llm_training.data.records import iter_json_records, training_text
+
+
+class PendingDocument(NamedTuple):
+    file_number: int
+    row_number: int
+    text: str
+    text_column: str
+    group_value: object
+    source_value: object
 
 
 def write_json(path, value):
@@ -211,7 +221,7 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
 
             def encoded_rows():
                 nonlocal tokenized_documents, tokenized_tokens, next_tokenize_log
-                texts = [item[2] for item in batch]
+                texts = [item.text for item in batch]
                 encoded = tokenizer(
                     texts,
                     add_special_tokens=False,
@@ -220,11 +230,14 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
                 )["input_ids"]
                 batch_tokens = 0
                 for item, ids in zip(batch, encoded, strict=True):
-                    file_number, row_number, text, used_text_column = item
-                    digest = hashlib.sha256(text.encode()).hexdigest()
-                    key = str(item[4]) if group_column else digest
+                    digest = hashlib.sha256(item.text.encode()).hexdigest()
+                    key = str(item.group_value) if group_column else digest
                     split = assignment[key]
-                    origin = str(item[5]) if source_column else inventory[file_number]["path"]
+                    origin = (
+                        str(item.source_value)
+                        if source_column
+                        else inventory[item.file_number]["path"]
+                    )
                     ids.append(tokenizer.eos_token_id)
                     batch_tokens += len(ids)
                     document_counts[split] += 1
@@ -234,14 +247,14 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
                     manifest.write(
                         json.dumps(
                             {
-                                "file": file_number,
-                                "row": row_number,
+                                "file": item.file_number,
+                                "row": item.row_number,
                                 "text_sha256": digest,
                                 "group": key,
                                 "source": origin,
                                 "split": split,
                                 "tokens_with_eos": len(ids),
-                                "text_column": used_text_column,
+                                "text_column": item.text_column,
                             },
                             ensure_ascii=False,
                         )
@@ -267,7 +280,7 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
                         row, text_columns, f"{file}, record {row_number + 1}"
                     )
                     batch.append(
-                        (
+                        PendingDocument(
                             file_number,
                             row_number,
                             text,
