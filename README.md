@@ -22,8 +22,175 @@ Không dán token vào code, notebook hoặc log.
 
 Chạy các cell theo thứ tự. Cell đầu giải nén source đã đóng gói và kiểm tra SHA256;
 không cần upload code ZIP riêng. CLI có thể yêu cầu `modal setup` để xác thực
-workspace. Phần còn lại của README cung cấp từng lệnh tương ứng để copy chạy
-trong terminal; trong notebook có thể thêm `!` trước các lệnh shell.
+workspace. Phần ngay dưới đây chia hướng dẫn thành từng code cell để copy vào
+notebook mới; từ mục 2 là các lệnh tương ứng dành cho terminal.
+
+### Copy từng cell vào một Modal Notebook mới
+
+Nếu import `notebooks/modal_a10080.ipynb`, chạy các cell sẵn có của notebook;
+không cần chạy thêm quy trình dưới đây. Nếu muốn tự tạo notebook từ README,
+copy mỗi block bên dưới vào **một code cell riêng**, chạy đúng thứ tự.
+
+Trước khi chạy: chọn **kernel CPU** cho notebook điều khiển; tạo Secret
+`hf-token` với key `HF_TOKEN` trong cùng Modal environment. Upload file
+`continue-pretrainedllms-modal-a10080.zip` vào thư mục hiện tại qua Files panel.
+Các function remote sẽ cấp A100 80GB khi cần, không cần cấp GPU cho notebook.
+
+#### Cell 1 — Cài Modal CLI vào môi trường notebook
+
+```python
+%pip install 'modal>=1,<2'
+```
+
+#### Cell 2 — Giải nén code và thiết lập lệnh dùng chung
+
+ZIP này là gói source phát hành, không phải `audit_bundle.zip`. Nếu upload ở vị trí
+khác, sửa `ZIP_PATH` theo đường dẫn trong Files panel. Không dùng đường dẫn máy Mac
+`/Users/mong/...` bên trong máy remote của Modal.
+
+```python
+from pathlib import Path
+import os
+import subprocess
+import zipfile
+
+ZIP_PATH = Path("continue-pretrainedllms-modal-a10080.zip").resolve()
+WORKSPACE = Path("modal_cpt_project").resolve()
+assert ZIP_PATH.is_file(), f"Chưa tìm thấy file code ZIP: {ZIP_PATH}"
+WORKSPACE.mkdir(parents=True, exist_ok=True)
+
+with zipfile.ZipFile(ZIP_PATH) as archive:
+    for item in archive.infolist():
+        target = (WORKSPACE / item.filename).resolve()
+        if not target.is_relative_to(WORKSPACE):
+            raise ValueError(f"Đường dẫn ZIP không hợp lệ: {item.filename}")
+    archive.extractall(WORKSPACE)
+
+PROJECT = WORKSPACE / "continue-pretrainedllms"
+assert (PROJECT / "scripts/modal_full_ft.py").is_file()
+assert (PROJECT / "tests/test_training.py").is_file()
+os.chdir(PROJECT)
+
+RUN_ID = "qwen3-1.7b-a10080-e02-b16-ga2-v2"
+SCRIPT = "scripts/modal_full_ft.py"
+
+def modal_command(*arguments):
+    subprocess.run(["modal", *arguments], cwd=PROJECT, check=True)
+
+print("Project:", PROJECT)
+print("Run ID:", RUN_ID)
+```
+
+#### Cell 3 — Xác thực Modal CLI
+
+Nếu CLI đã được xác thực đúng workspace, có thể bỏ qua cell này. Nếu chưa, chạy
+cell và mở liên kết được in ra để đăng nhập. Không nhập Hugging Face token ở đây;
+HF token do Secret `hf-token` cung cấp cho function remote.
+
+```python
+modal_command("setup")
+```
+
+#### Cell 4 — Kiểm tra pipeline trên CPU trước khi cấp GPU
+
+Nếu có lỗi hoặc test bị skip, xử lý lỗi trước khi chạy cell tiếp theo. Cell này
+không tải corpus hoặc weights Qwen.
+
+```python
+modal_command("run", SCRIPT, "--check-only")
+```
+
+#### Cell 5 — Chuẩn bị dữ liệu trên CPU
+
+Lần đầu tải corpus và tokenize/packing có thể mất nhiều giờ. Các lần sau tái sử
+dụng artifact phù hợp. Chờ cell hoàn thành thành công trước khi train.
+
+```python
+modal_command("run", SCRIPT, "--prepare-only")
+```
+
+#### Cell 6 — Train một phiên trên A100 80GB
+
+Cấu hình: **2 epoch, context 2048, batch 16, accumulation 2, BF16,
+weight decay 0.1, Adam betas (0.9, 0.95), warmup 1%**.
+
+Chỉ chạy một job cho mỗi `RUN_ID`. `--detach` cho phép function remote tiếp tục
+khi mất kết nối. Lệnh có thể vẫn hiển thị log/chờ kết quả; việc cell đang chạy
+không có nghĩa job chưa được khởi tạo. Sau khi Modal xác nhận function train đã
+bắt đầu, nếu muốn dùng các cell sau có thể interrupt cell điều khiển; không bấm
+Stop/Cancel function train trong dashboard.
+
+```python
+modal_command("run", "--detach", SCRIPT, "--run-id", RUN_ID)
+```
+
+Một phiên yêu cầu dừng có lưu checkpoint sau khoảng 18 giờ; tổng 2 epoch có thể
+cần nhiều phiên. Chưa có benchmark A100 xác nhận thời gian hoặc peak VRAM của
+batch 16 trong bản này; kiểm tra VRAM/loss ở các step đầu.
+
+#### Cell 7 — Xem trạng thái, số step và ETA
+
+Cell này dùng CPU để đọc trạng thái, không tạo thêm GPU training. Nếu notebook
+đã restart, chạy lại Cell 1–2 trước; chỉ chạy Cell 3 nếu cần đăng nhập lại.
+
+```python
+modal_command("run", SCRIPT, "--status-only", "--run-id", RUN_ID)
+```
+
+#### Cell 8 — Resume phiên tiếp theo khi phiên trước đã kết thúc
+
+Kiểm tra Cell 7 và dashboard trước. Khi `status="stopped"` hoặc phiên failed đã
+kết thúc và có checkpoint hoàn chỉnh, chạy cell này để tiếp tục. Khi job đang
+`running`, không chạy lại. Khi `completed`, không còn gì cần train.
+Giữ nguyên `RUN_ID`, code/config và package versions khi resume.
+
+```python
+modal_command("run", "--detach", SCRIPT, "--run-id", RUN_ID)
+```
+
+Nếu muốn tự nối nhiều phiên khi giữ notebook điều khiển hoạt động, thay Cell 6/8
+bằng lệnh sau. Chọn **một** cách chạy; không chạy hai cách đồng thời.
+
+```python
+modal_command("run", SCRIPT, "--sessions", "10", "--run-id", RUN_ID)
+```
+
+#### Cell 9 — Đánh giá test sau khi chọn run hoàn tất (tùy chọn)
+
+Chỉ chạy sau khi `status="completed"` và đã chọn run bằng validation. Cell này
+cấp GPU để evaluate best checkpoint, không train. Mỗi run chỉ ghi test một lần.
+Không chạy cell này chỉ để xem tiến độ.
+
+```python
+modal_command("run", SCRIPT, "--test-only", "--run-id", RUN_ID)
+```
+
+#### Cell 10 — Đóng gói và tải log thí nghiệm vào notebook
+
+Không cần chờ train hoàn tất nếu chỉ muốn lấy snapshot log hiện có. Chạy lại sau
+train/test để lấy bản cuối. ZIP gồm log/provenance/source snapshot, không gồm
+weights và optimizer state. Sau cell này, tải file được in ra qua Files panel.
+
+```python
+from datetime import datetime, timezone
+
+modal_command("run", SCRIPT, "--export-only", "--run-id", RUN_ID)
+EXPORT_DIR = PROJECT / "artifacts" / RUN_ID
+EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+LOCAL_ZIP = EXPORT_DIR / (
+    "audit_bundle_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + ".zip"
+)
+modal_command(
+    "volume", "get", "qwen3-1-7b-full-ft-runs",
+    f"/{RUN_ID}/audit_bundle.zip", str(LOCAL_ZIP),
+)
+print("Tải file này về máy:", LOCAL_ZIP)
+```
+
+Các bước từ Cell 4 đến Cell 10 giữ log/checkpoint trên Modal Volume, không phụ
+thuộc ổ đĩa tạm của notebook. Code giải nén ở Cell 2 và ZIP tải về ở Cell 10 có
+thể mất khi kernel bị xóa nếu không nằm trên Volume; giữ bản source phát hành
+và tải kết quả về máy.
 
 ## 2. Nếu dùng ZIP và terminal
 
