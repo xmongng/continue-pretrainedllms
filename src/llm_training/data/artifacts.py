@@ -6,6 +6,7 @@ import hashlib
 import json
 import shutil
 import tempfile
+import time
 from collections import Counter, defaultdict
 from itertools import islice
 from pathlib import Path
@@ -144,6 +145,8 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
     group_column = data.get("group_column")
     source_column = data.get("source_column")
     remaining = data.get("max_documents")
+    scanned_documents = 0
+    scan_started = time.monotonic()
     for number, file in enumerate(files):
         row_count = 0
         rows = iter_json_records(file, data.get("json_field"))
@@ -163,7 +166,15 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
                 raise ValueError(f"Empty group identifier in {file}, record {row_number}")
             group_counts[key] += 1
             row_count += 1
+            scanned_documents += 1
         selected_files.append((number, file, row_count))
+        if (number + 1) % 10 == 0 or number + 1 == len(files) or remaining == row_count:
+            elapsed = max(time.monotonic() - scan_started, 1e-9)
+            print(
+                f"[prepare:scan] shards={number + 1}/{len(files)} "
+                f"documents={scanned_documents:,} rate={scanned_documents / elapsed:,.1f} docs/s",
+                flush=True,
+            )
         if remaining is not None:
             remaining -= row_count
         if remaining == 0:
@@ -188,12 +199,18 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
     lengths = defaultdict(Counter)
     manifest_path = work / "split_manifest.jsonl"
     tokenize_batch_size = data.get("tokenize_batch_size", 32)
+    tokenized_documents = 0
+    tokenized_tokens = 0
+    tokenize_started = time.monotonic()
+    next_tokenize_log = 1_000
 
     def token_rows():
+        nonlocal tokenized_documents, tokenized_tokens, next_tokenize_log
         with manifest_path.open("w", encoding="utf-8") as manifest:
             batch = []
 
             def encoded_rows():
+                nonlocal tokenized_documents, tokenized_tokens, next_tokenize_log
                 texts = [item[2] for item in batch]
                 encoded = tokenizer(
                     texts,
@@ -201,6 +218,7 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
                     return_attention_mask=False,
                     truncation=False,
                 )["input_ids"]
+                batch_tokens = 0
                 for item, ids in zip(batch, encoded, strict=True):
                     file_number, row_number, text, used_text_column = item
                     digest = hashlib.sha256(text.encode()).hexdigest()
@@ -208,6 +226,7 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
                     split = assignment[key]
                     origin = str(item[5]) if source_column else inventory[file_number]["path"]
                     ids.append(tokenizer.eos_token_id)
+                    batch_tokens += len(ids)
                     document_counts[split] += 1
                     token_counts[split] += len(ids)
                     lengths[split][len(ids)] += 1
@@ -229,6 +248,17 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
                         + "\n"
                     )
                     yield {"input_ids": ids, "split": split}
+                tokenized_documents += len(batch)
+                tokenized_tokens += batch_tokens
+                if tokenized_documents >= next_tokenize_log:
+                    elapsed = max(time.monotonic() - tokenize_started, 1e-9)
+                    print(
+                        f"[prepare:tokenize] documents={tokenized_documents:,}/{scanned_documents:,} "
+                        f"tokens={tokenized_tokens:,} "
+                        f"rate={tokenized_tokens / elapsed:,.0f} tokens/s",
+                        flush=True,
+                    )
+                    next_tokenize_log = ((tokenized_documents // 1_000) + 1) * 1_000
 
             for file_number, file, row_count in selected_files:
                 rows = islice(iter_json_records(file, data.get("json_field")), row_count)
@@ -251,6 +281,12 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
                         batch.clear()
             if batch:
                 yield from encoded_rows()
+            elapsed = max(time.monotonic() - tokenize_started, 1e-9)
+            print(
+                f"[prepare:tokenize] complete documents={tokenized_documents:,} "
+                f"tokens={tokenized_tokens:,} rate={tokenized_tokens / elapsed:,.0f} tokens/s",
+                flush=True,
+            )
 
     tokenized = Dataset.from_generator(token_rows, cache_dir=str(work / "intermediate"))
     packed = DatasetDict()
