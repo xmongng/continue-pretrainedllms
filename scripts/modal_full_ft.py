@@ -43,6 +43,7 @@ image = (
     .add_local_dir(str(PROJECT / "src" / "llm_training"), "/root/llm_training")
     .add_local_dir(str(PROJECT / "configs"), "/root/configs")
     .add_local_dir(str(PROJECT / "tests"), "/root/tests")
+    .add_local_file(str(PROJECT / "scripts" / "modal_notebook.py"), "/root/scripts/modal_notebook.py")
     .add_local_file(str(PROJECT / "scripts" / "modal_full_ft.py"), "/root/launcher_snapshot.py")
 )
 app = modal.App("qwen3-1-7b-full-ft", image=image)

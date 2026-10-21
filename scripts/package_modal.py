@@ -4,11 +4,11 @@ import base64
 import hashlib
 import io
 import json
+import re
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-RUN_ID = "qwen3-1.7b-a10080-e02-b16-ga2-v2"
 
 
 def cell(kind, source):
@@ -31,56 +31,46 @@ def main():
     content = payload.getvalue()
     encoded = base64.b64encode(content).decode()
     checksum = hashlib.sha256(content).hexdigest()
-    bootstrap = f'''# Code nguồn đóng gói trong notebook; không chứa token hoặc checkpoint.
-import base64, hashlib, io, os, zipfile
+    bootstrap = f'''# Source code is embedded; no GitHub download or Modal CLI is needed.
+import base64, hashlib, io, tempfile, zipfile
 from pathlib import Path
+ROOT = Path("/mnt/qwen3-cpt")
+assert ROOT.is_dir(), "Attach Volume qwen3-cpt at /mnt/qwen3-cpt first"
+PROJECT = ROOT / "project-volume-data-v1"
 payload = base64.b64decode({encoded!r})
 assert hashlib.sha256(payload).hexdigest() == {checksum!r}
-work = Path.cwd() / "cpt_workspace"
-work.mkdir(exist_ok=True)
-with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-    for item in archive.infolist():
-        target = (work / item.filename).resolve()
-        if not target.is_relative_to(work.resolve()):
-            raise ValueError("Unsafe archive path")
-    archive.extractall(work)
-os.chdir(work / "continue-pretrainedllms")
-print("Project:", Path.cwd())
+if not (PROJECT / "scripts/modal_notebook.py").is_file():
+    with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+        work = Path(directory).resolve()
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            for item in archive.infolist():
+                if not (work / item.filename).resolve().is_relative_to(work):
+                    raise ValueError("Unsafe archive path")
+            archive.extractall(work)
+        (work / "continue-pretrainedllms").rename(PROJECT)
+print("Project:", PROJECT)
 '''
-    invoke = '''import subprocess
-def modal_command(*arguments):
-    subprocess.run(["modal", *arguments], check=True)
-'''
-    cells = [
-        cell("markdown", "# Qwen3-1.7B CPT trên Modal A100 80GB\n\n"
-             "Dùng notebook kernel **CPU**; launcher cấp riêng một A100 80GB. "
-             "Tạo Secret `hf-token` chứa `HF_TOKEN` trong cùng Modal environment trước khi chạy. "
-             "Full fine-tuning: 2 epoch, batch 16, accumulation 2, context 2048. "
-             "Chỉ bắt đầu một job cho mỗi run ID.\n"),
-        cell("code", bootstrap),
-        cell("code", "%pip install 'modal>=1,<2'\n"),
-        cell("markdown", "## Đăng nhập Modal CLI\n\nChạy một lần nếu CLI chưa được xác thực; "
-             "mở liên kết được in ra và đăng nhập đúng workspace/environment chứa Secret.\n"),
-        cell("code", invoke + '\nmodal_command("setup")\n'),
-        cell("markdown", "## Kiểm tra CPU trước khi thuê GPU\n\nKhông tải corpus hoặc weights Qwen. "
-             "Nếu cell lỗi, xử lý lỗi trước khi chạy tiếp.\n"),
-        cell("code", 'modal_command("run", "scripts/modal_full_ft.py", "--check-only")\n'),
-        cell("markdown", "## Chuẩn bị corpus trên CPU\n\nTải 253 shard từ `iraprp/chayqwen`, "
-             "ghim model/data revision và lưu packed Arrow trên Volume. Có thể mất nhiều giờ ở lần đầu.\n"),
-        cell("code", 'modal_command("run", "scripts/modal_full_ft.py", "--prepare-only")\n'),
-        cell("markdown", "## Train hoặc resume một phiên\n\n"
-             "Một phiên dừng có lưu checkpoint sau khoảng 18 giờ để chừa thời gian trong giới hạn 24 giờ. "
-             "`--detach` giữ job remote nếu notebook mất kết nối; có thể dừng cell sau khi Modal xác nhận job đã khởi chạy. "
-             "Chờ phiên trước kết thúc trước khi chạy lại. Giữ nguyên notebook/code/config để resume.\n"),
-        cell("code", f'RUN_ID = {RUN_ID!r}\nmodal_command("run", "--detach", "scripts/modal_full_ft.py", "--run-id", RUN_ID)\n'),
-        cell("markdown", "## Xem trạng thái và ETA\n\nCó thể chạy từ notebook khác hoặc sau khi phiên kết thúc. "
-             "ETA lấy từ tốc độ đo được, gồm overhead xảy ra giữa các lần log.\n"),
-        cell("code", f'RUN_ID = {RUN_ID!r}\nmodal_command("run", "scripts/modal_full_ft.py", "--status-only", "--run-id", RUN_ID)\n'),
-        cell("markdown", "## Tải hồ sơ thí nghiệm\n\nGói này chứa log, thống kê, cấu hình và snapshot source; "
-             "không chứa model weights. Tải `audit_bundle.zip` về máy qua Files panel.\n"),
-        cell("code", 'modal_command("run", "scripts/modal_full_ft.py", "--export-only", "--run-id", RUN_ID)\n'
-             'modal_command("volume", "get", "qwen3-1-7b-full-ft-runs", f"/{RUN_ID}/audit_bundle.zip", "./audit_bundle.zip")\n'),
-    ]
+    readme = (ROOT / "README.md").read_text()
+    sections = re.findall(r"(## Cell [^\n]+)\n(.*?)(?=\n## Cell |\Z)", readme, re.S)
+    if len(sections) != 8:
+        raise ValueError("README must contain the eight direct Modal Notebook cells")
+    cells = [cell("markdown", "# Qwen3-1.7B — trực tiếp trên Modal Notebook\n\n"
+                  "Chọn 1 A100 80GB; gắn Volume lưu code/cache/log tại `/mnt/qwen3-cpt`. "
+                  "Gắn Volume chứa dataset và điền `DATA_PATH` ở Cell 3. Không tải lại dataset. "
+                  "Code đã được nhúng trong notebook; "
+                  "không cần code ZIP, GitHub, `modal setup` hoặc `modal run`. "
+                  "Chạy Cell 1–5 theo thứ tự. Giữ kernel chạy khi train.\n")]
+    for index, (heading, section) in enumerate(sections):
+        match = re.search(r"```python\n(.*?)```", section, re.S)
+        if match is None:
+            raise ValueError(f"Missing Python cell under {heading}")
+        code = bootstrap if index == 0 else match.group(1)
+        description = "Code nguồn được nhúng và giải nén vào Volume.\n" if index == 0 else section[:match.start()]
+        cells.append(cell("markdown", heading + "\n\n" + description))
+        cells.append(cell("code", code))
+        tail = section[match.end():].strip()
+        if tail:
+            cells.append(cell("markdown", tail + "\n"))
     notebook = {"cells": cells, "metadata": {
         "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
         "language_info": {"name": "python", "version": "3.11"},

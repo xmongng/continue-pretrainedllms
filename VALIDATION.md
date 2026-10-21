@@ -4,23 +4,27 @@
 
 - Ruff: `ruff check src scripts tests` — đạt.
 - Python AST và JSON config parsing — đạt.
-- Unittest: 6 bài stdlib đạt (packing, step budget, progress/ETA, system log/CSV,
-  provenance/source hashes, và audit ZIP integrity).
+- Unittest: 10 bài stdlib đạt (packing, step budget, progress/ETA, system log/CSV,
+  provenance/source hashes, audit ZIP integrity, dataset URL, config đường dẫn Volume và DATA_PATH (không tải lại dataset)).
 - 3 bài ML được skip vì workspace chưa có torch/transformers/datasets/accelerate.
   Thử cài vào virtualenv tạm không thành công vì không phân giải được PyPI.
 - Chưa chạy Modal image build, chưa thuê GPU, chưa đo VRAM/throughput hoặc thời gian
   hoàn thành. Không có kết quả benchmark A100 trong bản bàn giao.
 
-Chạy bước bắt buộc trước khi train:
+Với notebook trực tiếp, chạy Cell 4 (`run("--check")`) trước khi train. Tương đương:
 
 ```bash
-modal run scripts/modal_full_ft.py --check-only
+python scripts/modal_notebook.py --check --volume /mnt/qwen3-cpt
 ```
 
-Lệnh này chạy CPU trong image được ghim package. Nó kiểm tra thêm loss/gradient
+Lệnh này chạy các bài test trên CPU trong subprocess của notebook. Nó kiểm tra thêm loss/gradient
 chunked so với phép tính tham chiếu, phát hiện gradient không hữu hạn, và tính nhất
 quán của checkpoint/resume so với train liên tục bằng model tiny local. Nếu có
 bài bị skip hoặc lỗi, lệnh trả exit code khác 0. Không tải corpus hoặc weights Qwen.
+
+Notebook trực tiếp dùng GPU của kernel Modal Notebook; không gọi `modal run` hoặc
+khởi tạo function remote thứ hai. Volume và Secret phải gắn vào chính notebook.
+Launcher CLI `scripts/modal_full_ft.py` cũ vẫn là lựa chọn riêng nếu cần.
 
 Các thay đổi ảnh hưởng training loop:
 
