@@ -3,6 +3,8 @@
   "data": {
     "source": "/data/corpus/data",
     "cache_dir": "/data/cache",
+    "text_column": "full_text",
+    "source_column": null,
     "max_length": 2048,
     "validation_fraction": 0.001,
     "test_fraction": 0.001

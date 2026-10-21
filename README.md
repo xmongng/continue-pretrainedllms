@@ -54,7 +54,8 @@ print("Code:", PROJECT)
 
 **Chỉ sửa `DATA_PATH` thành đường dẫn thư mục chứa các shard của bạn.**
 Không tải lại hoặc sao chép dataset từ Hugging Face. Các file `.jsonl.gz`/`.jsonl`
-phải có trường `full_paper` và `source`. Code tokenize/packing rồi lưu cache;
+phải có trường văn bản `full_text`. Metadata nguồn có thể nằm lồng trong record và
+không được dùng làm nội dung huấn luyện. Code tokenize/packing rồi lưu cache;
 nếu artifact khớp thì dùng lại. Model revision, file hashes và split được ghi
 trong hồ sơ thí nghiệm. Validation/test tự tách từ corpus, mỗi bên 0,1% số nhóm;
 chưa dùng valid set riêng bên ngoài.

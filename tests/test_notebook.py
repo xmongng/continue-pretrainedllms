@@ -58,7 +58,7 @@ class NotebookTests(unittest.TestCase):
             volume.mkdir()
             source = root / "another-volume" / "papers"
             source.mkdir(parents=True)
-            (source / "part-01.jsonl").write_text('{"full_paper":"paper","source":"local"}\n')
+            (source / "part-01.jsonl").write_text('{"full_text":"paper"}\n')
             artifact = {"id": "fixed-artifact", "path": str(volume / "cache/prepared/fixed-artifact"),
                         "statistics": {"train": {"sequences": 16, "target_tokens": 100}}}
             hub = types.ModuleType("huggingface_hub")
