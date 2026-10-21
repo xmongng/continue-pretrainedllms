@@ -7,12 +7,14 @@ import json
 import shutil
 import tempfile
 from collections import Counter, defaultdict
+from itertools import islice
 from pathlib import Path
 
-from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
+from datasets import Dataset, DatasetDict, load_from_disk
 from filelock import FileLock
 
 from llm_training.data.dataset import discover_data_files
+from llm_training.data.records import iter_json_records
 
 
 def write_json(path, value):
@@ -133,36 +135,36 @@ def prepare_artifacts(data, tokenizer):
 
 def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
     # Preserve source-file identity without re-cleaning or stripping code indentation.
-    shards = []
+    selected_files = []
     group_counts = Counter()
     text_column = data["text_column"]
     group_column = data.get("group_column")
     source_column = data.get("source_column")
     remaining = data.get("max_documents")
     for number, file in enumerate(files):
-        kwargs = {"field": data["json_field"]} if data.get("json_field") else {}
-        shard = load_dataset(
-            "json", data_files=file, split="train", cache_dir=data["cache_dir"], **kwargs
-        )
+        row_count = 0
+        rows = iter_json_records(file, data.get("json_field"))
         if remaining is not None:
-            shard = shard.select(range(min(remaining, len(shard))))
-            remaining -= len(shard)
-        for column in filter(None, (text_column, group_column, source_column)):
-            if column not in shard.column_names:
-                raise ValueError(f"Missing column {column!r} in {file}")
-        shards.append(shard)
-        for row in shard:
+            rows = islice(rows, remaining)
+        for row_number, row in enumerate(rows, start=1):
+            for column in filter(None, (text_column, group_column, source_column)):
+                if column not in row:
+                    raise ValueError(f"Missing column {column!r} in {file}, record {row_number}")
             text = row[text_column]
             if not isinstance(text, str) or not text.strip():
-                raise ValueError(f"Empty/non-string text in {file}")
+                raise ValueError(f"Empty/non-string text in {file}, record {row_number}")
             key = (
                 str(row[group_column])
                 if group_column
                 else hashlib.sha256(text.encode()).hexdigest()
             )
             if group_column and (row[group_column] is None or not key.strip()):
-                raise ValueError(f"Empty group identifier in {file}")
+                raise ValueError(f"Empty group identifier in {file}, record {row_number}")
             group_counts[key] += 1
+            row_count += 1
+        selected_files.append((number, file, row_count))
+        if remaining is not None:
+            remaining -= row_count
         if remaining == 0:
             break
     keys = sorted(
@@ -187,8 +189,9 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
 
     def token_rows():
         with manifest_path.open("w", encoding="utf-8") as manifest:
-            for file_number, shard in enumerate(shards):
-                for row_number, row in enumerate(shard):
+            for file_number, file, row_count in selected_files:
+                rows = islice(iter_json_records(file, data.get("json_field")), row_count)
+                for row_number, row in enumerate(rows):
                     text = row[text_column]
                     digest = hashlib.sha256(text.encode()).hexdigest()
                     key = str(row[group_column]) if group_column else digest

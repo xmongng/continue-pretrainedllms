@@ -1,6 +1,7 @@
 """Audit, packing and step accounting checks that run without ML dependencies."""
 
 import ast
+import gzip
 import json
 import tempfile
 import unittest
@@ -8,15 +9,39 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from llm_training.training.audit import ExperimentRecorder, bundle_audit, export_metrics, training_plan
+from llm_training.training.audit import (
+    ExperimentRecorder,
+    bundle_audit,
+    export_metrics,
+    training_plan,
+)
+from llm_training.data.records import iter_json_records
 
 
 class AuditTests(unittest.TestCase):
+    def test_jsonl_reader_ignores_inconsistent_metadata_types(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "part.jsonl.gz"
+            rows = [
+                {"full_text": "first", "published": "2025-01-02T00:00:00"},
+                {"full_text": "second", "published": ""},
+                {"full_text": "third", "published": None},
+            ]
+            with gzip.open(path, "wt", encoding="utf-8") as stream:
+                for row in rows:
+                    stream.write(json.dumps(row) + "\n")
+            self.assertEqual(list(iter_json_records(path)), rows)
+
     def test_step_rounding_and_explicit_budget(self):
-        config = {"data": {"max_length": 2048}, "training": {
-            "per_device_train_batch_size": 16, "gradient_accumulation_steps": 2,
-            "num_train_epochs": 2, "warmup_ratio": 0.01,
-        }}
+        config = {
+            "data": {"max_length": 2048},
+            "training": {
+                "per_device_train_batch_size": 16,
+                "gradient_accumulation_steps": 2,
+                "num_train_epochs": 2,
+                "warmup_ratio": 0.01,
+            },
+        }
         stats = {"train": {"sequences": 35, "target_tokens": 70000}}
         plan = training_plan(config, stats)
         self.assertEqual(plan["microbatches_per_epoch"], 3)
@@ -40,7 +65,10 @@ class AuditTests(unittest.TestCase):
                 first.progress(2, 200, 10, metrics={"eval_loss": 2})
             with patch("llm_training.training.audit.time.monotonic", return_value=120.0):
                 first.progress(4, 400, 10)
-            records = [json.loads(line) for line in (first.session / "progress.jsonl").read_text().splitlines()]
+            records = [
+                json.loads(line)
+                for line in (first.session / "progress.jsonl").read_text().splitlines()
+            ]
             self.assertEqual(records[0]["eta_seconds"], 40)
             self.assertNotIn("eta_seconds", records[1])
             self.assertEqual(records[2]["interval_seconds"], 10)
@@ -70,8 +98,11 @@ class AuditTests(unittest.TestCase):
         if not source.exists():  # Layout inside the Modal image.
             source = Path("/root/llm_training/data/artifacts.py")
         tree = ast.parse(source.read_text())
-        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
-                        and node.name == "packed_rows")
+        function = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "packed_rows"
+        )
         namespace = {}
         exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"), namespace)
         documents = [{"input_ids": list(range(7))}, {"input_ids": list(range(7, 23))}]
@@ -109,28 +140,48 @@ class AuditTests(unittest.TestCase):
             config_dir = root / "configs"
             config_dir.mkdir()
             config_path = config_dir / "run.json"
-            config_path.write_text('{}')
+            config_path.write_text("{}")
             artifact_dir = root / "prepared"
             artifact_dir.mkdir()
             manifest = artifact_dir / "split_manifest.jsonl"
             manifest.write_text('{"split":"train"}\n')
             (artifact_dir / "identity.json").write_text('{"id":"fixed"}')
-            config = {"config_path": str(config_path), "data": {"max_length": 2048},
-                      "training": {"per_device_train_batch_size": 16,
-                                   "gradient_accumulation_steps": 2, "num_train_epochs": 2}}
-            artifact = {"path": str(artifact_dir), "id": "fixed",
-                        "statistics": {"train": {"sequences": 32, "target_tokens": 65000}}}
+            config = {
+                "config_path": str(config_path),
+                "data": {"max_length": 2048},
+                "training": {
+                    "per_device_train_batch_size": 16,
+                    "gradient_accumulation_steps": 2,
+                    "num_train_epochs": 2,
+                },
+            }
+            artifact = {
+                "path": str(artifact_dir),
+                "id": "fixed",
+                "statistics": {"train": {"sequences": 32, "target_tokens": 65000}},
+            }
             recorder = ExperimentRecorder(root / "output")
-            with patch.dict("os.environ", {"HF_TOKEN": "never-store-this-token"}), patch(
-                "llm_training.training.audit.gpu_sample", return_value={"gpus": []}
+            with (
+                patch.dict("os.environ", {"HF_TOKEN": "never-store-this-token"}),
+                patch("llm_training.training.audit.gpu_sample", return_value={"gpus": []}),
             ):
                 recorder.snapshot(config, artifact, {"artifact_id": "fixed"})
             reference = json.loads((recorder.session / "dataset_reference.json").read_text())
-            self.assertEqual(reference["split_manifest_sha256"], hashlib.sha256(manifest.read_bytes()).hexdigest())
+            self.assertEqual(
+                reference["split_manifest_sha256"],
+                hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            )
             environment = (recorder.session / "environment.json").read_text()
             self.assertNotIn("never-store-this-token", environment)
-            for relative, digest in json.loads((recorder.session / "source_sha256.json").read_text()).items():
-                self.assertEqual(hashlib.sha256((recorder.session / "source" / relative).read_bytes()).hexdigest(), digest)
+            for relative, digest in json.loads(
+                (recorder.session / "source_sha256.json").read_text()
+            ).items():
+                self.assertEqual(
+                    hashlib.sha256(
+                        (recorder.session / "source" / relative).read_bytes()
+                    ).hexdigest(),
+                    digest,
+                )
             recorder.close()
 
 
