@@ -47,6 +47,7 @@ class NotebookTests(unittest.TestCase):
             self.assertEqual(config["training"]["gradient_accumulation_steps"], 2)
             self.assertEqual(config["data"]["text_column"], "full_text")
             self.assertEqual(config["data"]["text_column_fallbacks"], ["full_paper"])
+            self.assertEqual(config["data"]["tokenize_batch_size"], 32)
             source = volume / "my-existing-data"
             source.mkdir()
             pin.update(data_kind="local", data_path=str(source))

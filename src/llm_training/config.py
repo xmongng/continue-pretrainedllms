@@ -129,7 +129,16 @@ def load_config(path: str | Path) -> dict[str, Any]:
     if not isinstance(max_length, int) or isinstance(max_length, bool) or max_length < 2:
         raise ValueError("'data.max_length' must be an integer of at least 2")
 
-    for unused in ("preprocessing_num_workers", "tokenize_batch_size", "packing_batch_size"):
+    tokenize_batch_size = data.get("tokenize_batch_size", 32)
+    if (
+        isinstance(tokenize_batch_size, bool)
+        or not isinstance(tokenize_batch_size, int)
+        or tokenize_batch_size < 1
+    ):
+        raise ValueError("'data.tokenize_batch_size' must be a positive integer")
+    data["tokenize_batch_size"] = tokenize_batch_size
+
+    for unused in ("preprocessing_num_workers", "packing_batch_size"):
         data.pop(unused, None)
 
     training["output_dir"] = _resolve_path(

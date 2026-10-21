@@ -107,6 +107,7 @@ def prepare_artifacts(data, tokenizer):
             for k in (
                 "text_column",
                 "text_column_fallbacks",
+                "tokenize_batch_size",
                 "json_field",
                 "group_column",
                 "source_column",
@@ -186,24 +187,26 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
     source_counts = defaultdict(Counter)
     lengths = defaultdict(Counter)
     manifest_path = work / "split_manifest.jsonl"
+    tokenize_batch_size = data.get("tokenize_batch_size", 32)
 
     def token_rows():
         with manifest_path.open("w", encoding="utf-8") as manifest:
-            for file_number, file, row_count in selected_files:
-                rows = islice(iter_json_records(file, data.get("json_field")), row_count)
-                for row_number, row in enumerate(rows):
-                    text, used_text_column = training_text(
-                        row, text_columns, f"{file}, record {row_number + 1}"
-                    )
+            batch = []
+
+            def encoded_rows():
+                texts = [item[2] for item in batch]
+                encoded = tokenizer(
+                    texts,
+                    add_special_tokens=False,
+                    return_attention_mask=False,
+                    truncation=False,
+                )["input_ids"]
+                for item, ids in zip(batch, encoded, strict=True):
+                    file_number, row_number, text, used_text_column = item
                     digest = hashlib.sha256(text.encode()).hexdigest()
-                    key = str(row[group_column]) if group_column else digest
+                    key = str(item[4]) if group_column else digest
                     split = assignment[key]
-                    origin = (
-                        str(row[source_column]) if source_column else inventory[file_number]["path"]
-                    )
-                    ids = tokenizer(text, add_special_tokens=False, return_attention_mask=False)[
-                        "input_ids"
-                    ]
+                    origin = str(item[5]) if source_column else inventory[file_number]["path"]
                     ids.append(tokenizer.eos_token_id)
                     document_counts[split] += 1
                     token_counts[split] += len(ids)
@@ -226,6 +229,28 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
                         + "\n"
                     )
                     yield {"input_ids": ids, "split": split}
+
+            for file_number, file, row_count in selected_files:
+                rows = islice(iter_json_records(file, data.get("json_field")), row_count)
+                for row_number, row in enumerate(rows):
+                    text, used_text_column = training_text(
+                        row, text_columns, f"{file}, record {row_number + 1}"
+                    )
+                    batch.append(
+                        (
+                            file_number,
+                            row_number,
+                            text,
+                            used_text_column,
+                            row.get(group_column) if group_column else None,
+                            row.get(source_column) if source_column else None,
+                        )
+                    )
+                    if len(batch) == tokenize_batch_size:
+                        yield from encoded_rows()
+                        batch.clear()
+            if batch:
+                yield from encoded_rows()
 
     tokenized = Dataset.from_generator(token_rows, cache_dir=str(work / "intermediate"))
     packed = DatasetDict()

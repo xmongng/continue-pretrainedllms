@@ -29,7 +29,9 @@ def local_data_directory(value):
 def dataset_repository(url):
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.hostname != "huggingface.co":
-        raise ValueError("Use a Hugging Face dataset URL: https://huggingface.co/datasets/owner/name")
+        raise ValueError(
+            "Use a Hugging Face dataset URL: https://huggingface.co/datasets/owner/name"
+        )
     parts = parsed.path.strip("/").split("/")
     if len(parts) != 3 or parts[0] != "datasets" or not all(parts[1:]):
         raise ValueError("Use the dataset homepage URL, without /tree or /resolve")
@@ -42,7 +44,8 @@ def configure(volume, run_id):
     pin_path = volume / "corpus_pin.json"
     pin = json.loads(pin_path.read_text()) if pin_path.exists() else None
     source = (
-        pin["data_path"] if pin and pin.get("data_kind") == "local"
+        pin["data_path"]
+        if pin and pin.get("data_kind") == "local"
         else str(volume / "corpus" / "data")
     )
     os.environ["LLM_DATA_SOURCE"] = source
@@ -73,10 +76,11 @@ def prepare(volume, run_id, data_url=None, data_path=None):
     if pin_path.exists():
         pin = json.loads(pin_path.read_text())
         local_matches = (
-            pin.get("data_kind") == "local"
-            and Path(pin["data_path"]).resolve() == source
+            pin.get("data_kind") == "local" and Path(pin["data_path"]).resolve() == source
         )
-        remote_matches = pin.get("data_kind", "huggingface") == "huggingface" and pin.get("data_repo") == repo
+        remote_matches = (
+            pin.get("data_kind", "huggingface") == "huggingface" and pin.get("data_repo") == repo
+        )
         if not (local_matches if source is not None else remote_matches):
             raise ValueError("This Volume is pinned to another dataset; use a new Volume")
     else:
@@ -90,12 +94,18 @@ def prepare(volume, run_id, data_url=None, data_path=None):
         if source is not None:
             pin.update(data_kind="local", data_path=str(source))
         else:
-            pin.update(data_kind="huggingface", data_repo=repo, data_url=data_url,
-                       data_revision=api.repo_info(repo, repo_type="dataset").sha)
+            pin.update(
+                data_kind="huggingface",
+                data_repo=repo,
+                data_url=data_url,
+                data_revision=api.repo_info(repo, repo_type="dataset").sha,
+            )
         save_json(pin_path, pin)
     if source is None:
         snapshot_download(
-            repo_id=repo, repo_type="dataset", revision=pin["data_revision"],
+            repo_id=repo,
+            repo_type="dataset",
+            revision=pin["data_revision"],
             allow_patterns=["data/train-*.jsonl.gz", "data/train-*.jsonl"],
             local_dir=str(volume / "corpus"),
         )
@@ -109,8 +119,12 @@ def prepare(volume, run_id, data_url=None, data_path=None):
     config = configure(volume, run_id)
     tokenizer = load_tokenizer(config["model"])
     _, artifact = prepare_artifacts(config["data"], tokenizer)
-    report = {"artifact_id": artifact["id"], "artifact_path": artifact["path"],
-              "statistics": artifact["statistics"], "plan": training_plan(config, artifact["statistics"])}
+    report = {
+        "artifact_id": artifact["id"],
+        "artifact_path": artifact["path"],
+        "statistics": artifact["statistics"],
+        "plan": training_plan(config, artifact["statistics"]),
+    }
     save_json(volume / "prepared_notebook.json", report)
     print(json.dumps(report, indent=2))
 
@@ -122,9 +136,12 @@ def train(volume, run_id):
     from llm_training.training.audit import save_json, utc_now
     from llm_training.training.train import create_trainer, run_training
 
-    if (not torch.cuda.is_available() or torch.cuda.device_count() != 1
-            or "A100" not in torch.cuda.get_device_name(0)
-            or torch.cuda.get_device_properties(0).total_memory < 79_000_000_000):
+    if (
+        not torch.cuda.is_available()
+        or torch.cuda.device_count() != 1
+        or "A100" not in torch.cuda.get_device_name(0)
+        or torch.cuda.get_device_properties(0).total_memory < 79_000_000_000
+    ):
         raise RuntimeError("Select one A100 80GB in the Modal Notebook compute settings")
     if not (volume / "prepared_notebook.json").is_file():
         raise RuntimeError("Run the data preparation cell first")
@@ -137,7 +154,9 @@ def train(volume, run_id):
         return
     resume = bool(prior) and prior.get("stage") != "initialization"
     if not prior and output.exists() and any(output.iterdir()):
-        raise FileExistsError("Output already contains files without a run record; use a new run ID")
+        raise FileExistsError(
+            "Output already contains files without a run record; use a new run ID"
+        )
     started = time.monotonic()
 
     class SessionLimit(TrainerCallback):
@@ -157,8 +176,14 @@ def train(volume, run_id):
     except BaseException as error:
         import traceback
 
-        failure = {"status": "failed", "stage": "initialization", "utc": utc_now(),
-                   "config": config, "error": repr(error), "traceback": traceback.format_exc()}
+        failure = {
+            "status": "failed",
+            "stage": "initialization",
+            "utc": utc_now(),
+            "config": config,
+            "error": repr(error),
+            "traceback": traceback.format_exc(),
+        }
         save_json(output / "audit/initialization_failures" / f"{time.time_ns()}.json", failure)
         if not prior:
             save_json(run_path, failure)
@@ -176,8 +201,12 @@ def main():
     parser.add_argument("--volume", default="/mnt/qwen3-cpt")
     parser.add_argument("--run-id", default=DEFAULT_RUN)
     data_source = parser.add_mutually_exclusive_group()
-    data_source.add_argument("--data-path", help="Existing mounted dataset directory; no dataset download")
-    data_source.add_argument("--data-url", help="Optional Hugging Face dataset URL instead of a local directory")
+    data_source.add_argument(
+        "--data-path", help="Existing mounted dataset directory; no dataset download"
+    )
+    data_source.add_argument(
+        "--data-url", help="Optional Hugging Face dataset URL instead of a local directory"
+    )
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", args.run_id):
         parser.error("Invalid run ID")
@@ -195,6 +224,7 @@ def main():
     elif args.prepare:
         if args.data_path is None and args.data_url is None:
             parser.error("--prepare requires --data-path (mounted folder) or --data-url")
+        os.environ["TOKENIZERS_PARALLELISM"] = "true"
         prepare(volume, args.run_id, data_url=args.data_url, data_path=args.data_path)
     elif args.train:
         train(volume, args.run_id)
