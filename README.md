@@ -11,10 +11,11 @@ Nếu import `notebooks/modal_a10080.ipynb` của bản này, các cell đã đ�
 
 ## Cell 1 — Lấy code vào Volume
 
-GitHub hiện chưa push thành công. Trước mắt upload
-`continue-pretrainedllms-modal-a10080.zip` vào Files panel, cùng thư mục hiện tại
-của notebook. Hoặc đặt `CODE_URL` thành URL tải ZIP của **bản code này** khi đã
-được đưa lên GitHub/hosting. Khi restart notebook, code trên Volume được dùng lại.
+Cell này tải code từ GitHub theo commit cố định để các lần resume dùng cùng
+phiên bản. Khi restart notebook, code trên Volume được dùng lại. Nếu repository
+private hoặc không tải được URL, dùng notebook chứa sẵn code; hoặc để
+`CODE_URL = ""` và upload `continue-pretrainedllms-modal-a10080.zip` vào Files panel,
+cùng thư mục hiện tại của notebook.
 
 ```python
 from pathlib import Path
@@ -23,7 +24,7 @@ import io, tempfile, urllib.request, zipfile
 ROOT = Path("/mnt/qwen3-cpt")
 assert ROOT.is_dir(), "Gắn Volume qwen3-cpt tại /mnt/qwen3-cpt trước"
 PROJECT = ROOT / "project-volume-data-v1"
-CODE_URL = ""  # URL tải code ZIP; để trống nếu upload ZIP qua Files panel
+CODE_URL = "https://github.com/xmongng/continue-pretrainedllms/archive/8d037ccd2cb1855bc42c98b25f31fc83e8c2100e.zip"
 
 if not (PROJECT / "scripts/modal_notebook.py").is_file():
     payload = (
