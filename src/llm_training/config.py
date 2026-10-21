@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -72,10 +73,14 @@ def load_config(path: str | Path) -> dict[str, Any]:
     if not isinstance(model.get("name_or_path"), str) or not model["name_or_path"].strip():
         raise ValueError("'model.name_or_path' must be a nonempty string")
 
-    data["source"] = _resolve_path(project_root, data.get("source"), "data.source")
+    data["source"] = _resolve_path(
+        project_root,
+        os.environ.get("LLM_DATA_SOURCE") or data.get("source"),
+        "data.source",
+    )
     data["cache_dir"] = _resolve_path(
         project_root,
-        data.get("cache_dir", "data/cache"),
+        os.environ.get("LLM_DATA_CACHE_DIR") or data.get("cache_dir", "data/cache"),
         "data.cache_dir",
     )
 
@@ -99,6 +104,13 @@ def load_config(path: str | Path) -> dict[str, Any]:
         raise ValueError("test_fraction must be positive and val + test must be < 1")
     for key in ("group_column", "source_column"):
         data.setdefault(key, None)
+
+    for key in ("max_shards", "max_documents"):
+        value = data.get(key)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+        ):
+            raise ValueError(f"'data.{key}' must be a positive integer or null")
 
     max_length = data.get("max_length")
     if not isinstance(max_length, int) or isinstance(max_length, bool) or max_length < 2:

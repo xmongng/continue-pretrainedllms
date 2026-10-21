@@ -9,6 +9,7 @@ from pathlib import Path
 from llm_training.config import load_config
 from llm_training.data.artifacts import write_json
 from llm_training.training.train import create_trainer
+from llm_training.training.audit import ExperimentRecorder, export_metrics
 
 
 def main():
@@ -17,21 +18,46 @@ def main():
     parser.add_argument("--model", help="Default: best checkpoint from summary.json")
     parser.add_argument("--split", choices=("validation", "test"), default="validation")
     args = parser.parse_args()
-    config = load_config(args.config)
+    evaluate_run(load_config(args.config), args.split, args.model)
+
+
+def evaluate_run(config, split="validation", model=None):
+    if split not in ("validation", "test"):
+        raise ValueError("split must be validation or test")
     output = Path(config["training"]["output_dir"])
     summary = json.loads((output / "summary.json").read_text())
-    model = args.model or summary["best_checkpoint"]
+    if summary["status"] != "completed":
+        raise ValueError("Evaluate a completed run after selecting the checkpoint")
+    model = model or summary["best_checkpoint"]
     if not model:
         raise ValueError("No best checkpoint recorded")
-    if args.split == "test" and (output / "test_metrics.json").exists():
+    if split == "test" and (output / "test_metrics.json").exists():
         raise FileExistsError("Test already evaluated. Keep the recorded final assessment.")
     trainer = create_trainer(config, model_source=model)
     if trainer.dataset_artifact["id"] != summary["artifact_id"]:
         raise ValueError("Evaluation corpus/tokenizer differs from the recorded run")
-    dataset = trainer.test_dataset if args.split == "test" else trainer.eval_dataset
-    metrics = trainer.evaluate(eval_dataset=dataset, metric_key_prefix=args.split)
-    write_json(output / f"{args.split}_metrics.json", {"model": model, **metrics})
-    print(json.dumps(metrics, indent=2))
+    dataset = trainer.test_dataset if split == "test" else trainer.eval_dataset
+    recorder = ExperimentRecorder(output)
+    trainer.recorder = recorder
+    try:
+        contract = json.loads((output / "run.json").read_text())["contract"]
+        recorder.snapshot(config, trainer.dataset_artifact, contract)
+        recorder.event("assessment_started", split=split, model=model)
+        recorder.start()
+        metrics = trainer.evaluate(eval_dataset=dataset, metric_key_prefix=split)
+        result = {"model": model, "artifact_id": summary["artifact_id"],
+                  "audit_session_id": recorder.session_id, **metrics}
+        write_json(output / f"{split}_metrics.json", result)
+        recorder.event("assessment_finished", split=split, metrics=metrics)
+        print(json.dumps(metrics, indent=2))
+        return result
+    except BaseException as error:
+        recorder.event("assessment_failed", split=split, error=repr(error))
+        raise
+    finally:
+        recorder.close()
+        export_metrics(output)
+        trainer.recorder = None
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ from llm_training.config import load_config
 from llm_training.data.artifacts import file_hash, prepare_artifacts, write_json
 from llm_training.data.dataset import CausalLMCollator
 from llm_training.training.monitoring import AuditCallback, CPTTrainer
+from llm_training.training.audit import ExperimentRecorder, export_metrics, save_json
 
 
 def resolve_precision(runtime_config: dict[str, Any]) -> dict[str, Any]:
@@ -111,16 +112,20 @@ def create_trainer(
 ) -> CPTTrainer:
     """Build the tokenizer, model, datasets, arguments, and Trainer."""
 
+    initialization_started = time.monotonic()
     set_seed(int(config["training"].get("seed", 42)))
     for option in ("deepspeed", "fsdp", "ignore_data_skip", "label_smoothing_factor"):
         if config["training"].get(option):
             raise ValueError(f"{option} is outside this single-device audited runner")
     precision = resolve_precision(config["runtime"])
     tokenizer = load_tokenizer(config["model"], tokenizer_source=model_source)
+    tokenizer_ready = time.monotonic()
     if int(os.environ.get("WORLD_SIZE", "1")) > 1 or torch.cuda.device_count() > 1:
         raise ValueError("This audited runner supports one device. Set CUDA_VISIBLE_DEVICES.")
     datasets, artifact = prepare_artifacts(config["data"], tokenizer)
+    data_ready = time.monotonic()
     model = load_model(config["model"], precision, model_source=model_source)
+    model_ready = time.monotonic()
     model.config.pad_token_id = tokenizer.pad_token_id
     limit = getattr(model.config, "max_position_embeddings", None)
     if limit and config["data"]["max_length"] > limit:
@@ -142,7 +147,7 @@ def create_trainer(
         save_only_model=False,
         prediction_loss_only=False,
         logging_nan_inf_filter=False,
-        optim="adamw_torch",
+        optim=training_values.get("optim", "adamw_torch"),
     )
     training_args = TrainingArguments(**training_values)
 
@@ -175,6 +180,13 @@ def create_trainer(
         data_collator=CausalLMCollator(tokenizer, pad_to_multiple_of=None),
     )
     trainer.dataset_artifact = artifact
+    trainer.initialization_timings = {
+        "tokenizer_and_runtime_seconds": tokenizer_ready - initialization_started,
+        "data_artifacts_seconds": data_ready - tokenizer_ready,
+        "model_loading_seconds": model_ready - data_ready,
+        "trainer_setup_seconds": time.monotonic() - model_ready,
+        "total_seconds": time.monotonic() - initialization_started,
+    }
     trainer.test_dataset = datasets["test"]
     trainer.add_callback(AuditCallback(trainer))
     return trainer
@@ -264,6 +276,9 @@ def run_training(config, trainer, resume=None):
         if model_path.is_dir()
         else None,
     }
+    launcher_source = os.environ.get("LLM_LAUNCHER_SOURCE")
+    if launcher_source:
+        contract["launcher_sha256"] = file_hash(launcher_source)
     checkpoint = None
     prior_initialization_failures = []
     if resume:
@@ -312,17 +327,38 @@ def run_training(config, trainer, resume=None):
             raise FileExistsError("Run already exists; use resume or a fresh output directory")
         prior_initialization_failures = existing_run.get("initialization_failures", [])
 
+    recorder = ExperimentRecorder(output)
+    trainer.recorder = recorder
     run_record = {
         "contract": contract,
         "artifact_path": trainer.dataset_artifact["path"],
         "gpu": torch.cuda.get_device_name() if torch.cuda.is_available() else None,
         "status": "running",
         "resumed_from": str(checkpoint) if checkpoint else None,
+        "audit_session_id": recorder.session_id,
     }
     if prior_initialization_failures:
         run_record["initialization_failures"] = prior_initialization_failures
     write_json(output / "run.json", run_record)
     try:
+        recorder.snapshot(config, trainer.dataset_artifact, contract,
+                          extra_sources=[launcher_source] if launcher_source else [])
+        save_json(recorder.session / "model_runtime.json", {
+            "model_class": type(trainer.model).__name__,
+            "parameter_dtype": str(next(trainer.model.parameters()).dtype),
+            "parameters": sum(p.numel() for p in trainer.model.parameters()),
+            "trainable_parameters": sum(p.numel() for p in trainer.model.parameters() if p.requires_grad),
+            "bf16_autocast": trainer.args.bf16,
+            "fp16_autocast": trainer.args.fp16,
+            "gradient_checkpointing": trainer.args.gradient_checkpointing,
+            "attention_implementation": getattr(trainer.model.config, "_attn_implementation", None),
+            "torch_cuda_version": torch.version.cuda,
+            "cudnn_version": torch.backends.cudnn.version(),
+            "deterministic_algorithms": torch.are_deterministic_algorithms_enabled(),
+        })
+        recorder.event("session_started", resumed_from=str(checkpoint) if checkpoint else None)
+        save_json(recorder.session / "initialization_timings.json", trainer.initialization_timings)
+        recorder.start()
         if checkpoint is None:
             baseline = trainer.evaluate(metric_key_prefix="baseline")
             write_json(output / "baseline.json", baseline)
@@ -339,11 +375,14 @@ def run_training(config, trainer, resume=None):
             "training_session_metrics": result.metrics,
             "validation": metrics,
             "artifact_id": trainer.dataset_artifact["id"],
+            "audit_session_id": recorder.session_id,
+            "timing_totals": dict(recorder.phase_totals),
         }
         write_json(output / "summary.json", summary)
         run = json.loads((output / "run.json").read_text())
         run["status"] = summary["status"]
         write_json(output / "run.json", run)
+        recorder.event("session_finished", status=summary["status"], step=trainer.state.global_step)
     except BaseException as error:
         run = json.loads((output / "run.json").read_text())
         run.update(
@@ -353,7 +392,13 @@ def run_training(config, trainer, resume=None):
             traceback=traceback.format_exc(),
         )
         write_json(output / "run.json", run)
+        recorder.event("session_failed", step=trainer.state.global_step,
+                       error=repr(error), traceback=traceback.format_exc())
         raise
+    finally:
+        recorder.close()
+        export_metrics(output)
+        trainer.recorder = None
 
 
 if __name__ == "__main__":

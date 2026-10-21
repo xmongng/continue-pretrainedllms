@@ -7,16 +7,16 @@
     "attn_implementation": "sdpa"
   },
   "data": {
-    "source": "data/raw/dataset.zip",
+    "source": "../psy-v3-all-confirmed-jsonl/data",
     "cache_dir": "data/cache",
-    "text_column": "text",
+    "text_column": "full_paper",
     "json_field": null,
     "validation_fraction": 0.01,
     "seed": 42,
     "max_length": 1024,
     "test_fraction": 0.01,
     "group_column": null,
-    "source_column": null
+    "source_column": "source"
   },
   "training": {
     "seed": 42,

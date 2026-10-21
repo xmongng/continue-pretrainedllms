@@ -74,6 +74,8 @@ def prepare_artifacts(data, tokenizer):
         raise ValueError("An EOS token is required")
     cache = Path(data["cache_dir"])
     files = discover_data_files(data["source"], cache)
+    if data.get("max_shards"):
+        files = files[: data["max_shards"]]
     source = Path(data["source"])
     root = source if source.is_dir() else Path(files[0]).parent
     inventory = [
@@ -109,6 +111,8 @@ def prepare_artifacts(data, tokenizer):
                 "test_fraction",
                 "seed",
                 "max_length",
+                "max_shards",
+                "max_documents",
             )
         },
     }
@@ -134,11 +138,15 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
     text_column = data["text_column"]
     group_column = data.get("group_column")
     source_column = data.get("source_column")
+    remaining = data.get("max_documents")
     for number, file in enumerate(files):
         kwargs = {"field": data["json_field"]} if data.get("json_field") else {}
         shard = load_dataset(
             "json", data_files=file, split="train", cache_dir=data["cache_dir"], **kwargs
         )
+        if remaining is not None:
+            shard = shard.select(range(min(remaining, len(shard))))
+            remaining -= len(shard)
         for column in filter(None, (text_column, group_column, source_column)):
             if column not in shard.column_names:
                 raise ValueError(f"Missing column {column!r} in {file}")
@@ -155,6 +163,8 @@ def build_artifacts(work, files, inventory, data, tokenizer, recipe, identity):
             if group_column and (row[group_column] is None or not key.strip()):
                 raise ValueError(f"Empty group identifier in {file}")
             group_counts[key] += 1
+        if remaining == 0:
+            break
     keys = sorted(
         group_counts, key=lambda k: hashlib.sha256(f"{data.get('seed', 42)}:{k}".encode()).digest()
     )

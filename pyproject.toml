@@ -24,6 +24,8 @@ dev = ["pytest>=8,<9", "ruff>=0.9,<1"]
 llm-train = "llm_training.training.train:main"
 llm-evaluate = "llm_training.evaluation.evaluate:main"
 llm-compare = "llm_training.training.compare:main"
+llm-check-psychology = "llm_training.data.inspect_psychology:main"
+llm-count-tokens = "llm_training.data.count_tokens:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
