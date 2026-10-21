@@ -1,0 +1,51 @@
+{
+  "model": {
+    "name_or_path": "Qwen/Qwen3-1.7B-Base",
+    "revision": "main",
+    "trust_remote_code": false,
+    "use_fast_tokenizer": true,
+    "attn_implementation": "sdpa"
+  },
+  "data": {
+    "source": "../psy-v3-all-confirmed-jsonl/data",
+    "cache_dir": "data/cache",
+    "text_column": "full_paper",
+    "json_field": null,
+    "validation_fraction": 0.01,
+    "seed": 42,
+    "max_length": 1024,
+    "test_fraction": 0.01,
+    "group_column": null,
+    "source_column": "source"
+  },
+  "training": {
+    "seed": 42,
+    "learning_rate": 0.00002,
+    "lr_scheduler_type": "cosine",
+    "warmup_ratio": 0.03,
+    "weight_decay": 0.1,
+    "max_grad_norm": 1,
+    "per_device_train_batch_size": 1,
+    "per_device_eval_batch_size": 1,
+    "gradient_accumulation_steps": 16,
+    "gradient_checkpointing": true,
+    "gradient_checkpointing_kwargs": {
+      "use_reentrant": false
+    },
+    "eval_strategy": "steps",
+    "eval_steps": 100,
+    "save_strategy": "steps",
+    "save_steps": 100,
+    "save_total_limit": 2,
+    "logging_strategy": "steps",
+    "logging_steps": 10,
+    "dataloader_num_workers": 0,
+    "save_safetensors": true,
+    "report_to": "none",
+    "logging_first_step": true
+  },
+  "runtime": {
+    "precision": "auto",
+    "allow_tf32": true
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "extends": "qwen3_1_7b_base_common.json",
+  "training": {
+    "num_train_epochs": 2,
+    "run_name": "qwen3-1.7b-base-cpt-e02-seed42",
+    "output_dir": "outputs/qwen3-1.7b-base/cpt-e02-seed42"
+  }
+}

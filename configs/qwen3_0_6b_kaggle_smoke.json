@@ -1,0 +1,28 @@
+{
+  "extends": "qwen3_1_7b_base_common.json",
+  "model": {
+    "name_or_path": "Qwen/Qwen3-0.6B-Base"
+  },
+  "data": {
+    "cache_dir": "/kaggle/working/psychology-cache",
+    "max_shards": 1,
+    "max_documents": 128,
+    "max_length": 512,
+    "validation_fraction": 0.1,
+    "test_fraction": 0.1
+  },
+  "training": {
+    "output_dir": "/kaggle/working/qwen3-0.6b-smoke",
+    "run_name": "qwen3-0.6b-kaggle-smoke",
+    "max_steps": 100,
+    "learning_rate": 0.00001,
+    "gradient_accumulation_steps": 8,
+    "eval_steps": 50,
+    "save_steps": 50,
+    "logging_steps": 10
+  },
+  "runtime": {
+    "precision": "fp16",
+    "allow_tf32": false
+  }
+}
