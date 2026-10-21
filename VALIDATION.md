@@ -4,8 +4,8 @@
 
 - Ruff: `ruff check src scripts tests` — đạt.
 - Python AST và JSON config parsing — đạt.
-- Unittest: 8 bài stdlib đạt (packing, step budget, progress/ETA, system log/CSV,
-  provenance/source hashes, audit ZIP integrity, dataset URL và config đường dẫn Volume).
+- Unittest: 10 bài stdlib đạt (packing, step budget, progress/ETA, system log/CSV,
+  provenance/source hashes, audit ZIP integrity, dataset URL, config đường dẫn Volume và DATA_PATH (không tải lại dataset)).
 - 3 bài ML được skip vì workspace chưa có torch/transformers/datasets/accelerate.
   Thử cài vào virtualenv tạm không thành công vì không phân giải được PyPI.
 - Chưa chạy Modal image build, chưa thuê GPU, chưa đo VRAM/throughput hoặc thời gian

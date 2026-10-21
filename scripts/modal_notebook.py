@@ -17,6 +17,15 @@ sys.path.insert(0, str(PROJECT / "src"))
 DEFAULT_RUN = "qwen3-1.7b-notebook-a10080-e02-b16-ga2-v1"
 
 
+def local_data_directory(value):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("Set DATA_PATH to the mounted directory containing dataset shards")
+    source = Path(value).expanduser().resolve()
+    if not source.is_dir():
+        raise FileNotFoundError(f"Dataset directory does not exist: {source}")
+    return source
+
+
 def dataset_repository(url):
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.hostname != "huggingface.co":
@@ -30,13 +39,17 @@ def dataset_repository(url):
 def configure(volume, run_id):
     from llm_training.config import load_config
 
-    os.environ["LLM_DATA_SOURCE"] = str(volume / "corpus" / "data")
+    pin_path = volume / "corpus_pin.json"
+    pin = json.loads(pin_path.read_text()) if pin_path.exists() else None
+    source = (
+        pin["data_path"] if pin and pin.get("data_kind") == "local"
+        else str(volume / "corpus" / "data")
+    )
+    os.environ["LLM_DATA_SOURCE"] = source
     os.environ["LLM_DATA_CACHE_DIR"] = str(volume / "cache")
     config = load_config(PROJECT / "configs/qwen3_1_7b_modal_a100_full_ft.json")
     config["training"].update(output_dir=str(volume / "runs" / run_id), run_name=run_id)
-    pin_path = volume / "corpus_pin.json"
-    if pin_path.exists():
-        pin = json.loads(pin_path.read_text())
+    if pin is not None:
         if pin["model_repo"] != config["model"]["name_or_path"]:
             raise ValueError("The pinned model differs; use a new Volume for a different model")
         config["model"]["revision"] = pin["model_revision"]
@@ -44,41 +57,55 @@ def configure(volume, run_id):
     return config
 
 
-def prepare(volume, run_id, data_url):
+def prepare(volume, run_id, data_url=None, data_path=None):
+    if (data_url is None) == (data_path is None):
+        raise ValueError("Choose exactly one of --data-path or --data-url")
+    source = local_data_directory(data_path) if data_path is not None else None
+    repo = dataset_repository(data_url) if data_url is not None else None
     from huggingface_hub import HfApi, snapshot_download
 
     from llm_training.data.artifacts import prepare_artifacts
     from llm_training.training.audit import save_json, training_plan
     from llm_training.training.train import load_tokenizer
 
-    repo = dataset_repository(data_url)
     config = configure(volume, run_id)
     pin_path = volume / "corpus_pin.json"
     if pin_path.exists():
         pin = json.loads(pin_path.read_text())
-        if pin["data_repo"] != repo:
+        local_matches = (
+            pin.get("data_kind") == "local"
+            and Path(pin["data_path"]).resolve() == source
+        )
+        remote_matches = pin.get("data_kind", "huggingface") == "huggingface" and pin.get("data_repo") == repo
+        if not (local_matches if source is not None else remote_matches):
             raise ValueError("This Volume is pinned to another dataset; use a new Volume")
     else:
         api = HfApi()
         pin = {
-            "data_repo": repo, "data_url": data_url,
-            "data_revision": api.repo_info(repo, repo_type="dataset").sha,
             "model_repo": config["model"]["name_or_path"],
             "model_revision": api.model_info(
                 config["model"]["name_or_path"], revision=config["model"].get("revision", "main")
             ).sha,
         }
+        if source is not None:
+            pin.update(data_kind="local", data_path=str(source))
+        else:
+            pin.update(data_kind="huggingface", data_repo=repo, data_url=data_url,
+                       data_revision=api.repo_info(repo, repo_type="dataset").sha)
         save_json(pin_path, pin)
-    snapshot_download(
-        repo_id=repo, repo_type="dataset", revision=pin["data_revision"],
-        allow_patterns=["data/train-*.jsonl.gz", "data/train-*.jsonl"],
-        local_dir=str(volume / "corpus"),
-    )
-    shards = list((volume / "corpus/data").glob("train-*.jsonl*"))
-    if not shards:
-        raise ValueError("Dataset must contain data/train-*.jsonl[.gz] shards")
-    if repo == "iraprp/chayqwen" and len(shards) != 253:
-        raise ValueError(f"Expected 253 psychology shards, found {len(shards)}")
+    if source is None:
+        snapshot_download(
+            repo_id=repo, repo_type="dataset", revision=pin["data_revision"],
+            allow_patterns=["data/train-*.jsonl.gz", "data/train-*.jsonl"],
+            local_dir=str(volume / "corpus"),
+        )
+        shards = list((volume / "corpus/data").glob("train-*.jsonl*"))
+        if not shards:
+            raise ValueError("Dataset must contain data/train-*.jsonl[.gz] shards")
+        if repo == "iraprp/chayqwen" and len(shards) != 253:
+            raise ValueError(f"Expected 253 psychology shards, found {len(shards)}")
+    else:
+        print(f"Using existing dataset directory without downloading or copying: {source}")
     config = configure(volume, run_id)
     tokenizer = load_tokenizer(config["model"])
     _, artifact = prepare_artifacts(config["data"], tokenizer)
@@ -148,7 +175,9 @@ def main():
         actions.add_argument("--" + name, action="store_true")
     parser.add_argument("--volume", default="/mnt/qwen3-cpt")
     parser.add_argument("--run-id", default=DEFAULT_RUN)
-    parser.add_argument("--data-url", default="https://huggingface.co/datasets/iraprp/chayqwen")
+    data_source = parser.add_mutually_exclusive_group()
+    data_source.add_argument("--data-path", help="Existing mounted dataset directory; no dataset download")
+    data_source.add_argument("--data-url", help="Optional Hugging Face dataset URL instead of a local directory")
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", args.run_id):
         parser.error("Invalid run ID")
@@ -164,7 +193,9 @@ def main():
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         sys.exit(0 if result.wasSuccessful() and not result.skipped else 1)
     elif args.prepare:
-        prepare(volume, args.run_id, args.data_url)
+        if args.data_path is None and args.data_url is None:
+            parser.error("--prepare requires --data-path (mounted folder) or --data-url")
+        prepare(volume, args.run_id, data_url=args.data_url, data_path=args.data_path)
     elif args.train:
         train(volume, args.run_id)
     elif args.export:

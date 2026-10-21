@@ -1,8 +1,9 @@
 # Qwen3-1.7B — chạy trực tiếp trên Modal Notebook
 
 Mở **https://modal.com/notebooks**, tạo notebook và chọn **1 GPU A100 80GB**.
-Trong sidebar, gắn **Volume** tên `qwen3-cpt` tại **`/mnt/qwen3-cpt`** và
-Secret có key **`HF_TOKEN`** đủ quyền đọc dataset. Đây là thao tác một lần.
+Trong sidebar, gắn Volume lưu code/cache/log tại **`/mnt/qwen3-cpt`**.
+Gắn Volume chứa dữ liệu của bạn vào notebook nếu đó là Volume khác.
+Secret `HF_TOKEN` chỉ cần nếu bạn dùng model cần đăng nhập Hugging Face.
 
 Copy mỗi block dưới đây vào **một code cell**, chạy từ Cell 1 đến Cell 5.
 Không cần `modal setup`, `modal run`, hoặc một notebook CPU điều khiển GPU khác.
@@ -21,7 +22,7 @@ import io, tempfile, urllib.request, zipfile
 
 ROOT = Path("/mnt/qwen3-cpt")
 assert ROOT.is_dir(), "Gắn Volume qwen3-cpt tại /mnt/qwen3-cpt trước"
-PROJECT = ROOT / "project"
+PROJECT = ROOT / "project-volume-data-v1"
 CODE_URL = ""  # URL tải code ZIP; để trống nếu upload ZIP qua Files panel
 
 if not (PROJECT / "scripts/modal_notebook.py").is_file():
@@ -48,17 +49,19 @@ print("Code:", PROJECT)
 %pip install torch==2.8.0 transformers==4.57.6 datasets==4.4.1 accelerate==1.10.1 huggingface_hub==0.36.0 safetensors filelock hf_xet
 ```
 
-## Cell 3 — Tải dữ liệu từ link và tokenize/packing
+## Cell 3 — Chỉ định folder dữ liệu đã có trên Volume
 
-Đổi `DATA_URL` tại đây nếu cần. Dataset phải có các shard
-`data/train-*.jsonl.gz` hoặc `.jsonl`, chứa trường `full_paper` và `source`.
-Revision model/data được ghim trên Volume. Validation/test tự tách từ corpus,
-mỗi bên 0,1% số nhóm; chưa dùng valid set riêng bên ngoài.
+**Chỉ sửa `DATA_PATH` thành đường dẫn thư mục chứa các shard của bạn.**
+Không tải lại hoặc sao chép dataset từ Hugging Face. Các file `.jsonl.gz`/`.jsonl`
+phải có trường `full_paper` và `source`. Code tokenize/packing rồi lưu cache;
+nếu artifact khớp thì dùng lại. Model revision, file hashes và split được ghi
+trong hồ sơ thí nghiệm. Validation/test tự tách từ corpus, mỗi bên 0,1% số nhóm;
+chưa dùng valid set riêng bên ngoài.
 
 ```python
 import subprocess, sys
 
-DATA_URL = "https://huggingface.co/datasets/iraprp/chayqwen"
+DATA_PATH = "/mnt/qwen3-cpt/data"  # THAY bằng folder dữ liệu trên Volume của bạn
 RUN_ID = "qwen3-1.7b-notebook-a10080-e02-b16-ga2-v1"
 SCRIPT = PROJECT / "scripts/modal_notebook.py"
 OUTPUT = ROOT / "runs" / RUN_ID
@@ -69,11 +72,12 @@ def run(*arguments):
         cwd=PROJECT, check=True,
     )
 
-run("--prepare", "--data-url", DATA_URL)
+run("--prepare", "--data-path", DATA_PATH)
 ```
 
-Dữ liệu/cache ở `ROOT / "corpus"`, `ROOT / "cache"`, `ROOT / "hf-cache"`.
-Cell này chưa tải weights model. CPU làm tokenize/packing; nếu notebook đã cấp
+Dữ liệu giữ nguyên tại `DATA_PATH`. Cache ở `ROOT / "cache"` và `ROOT / "hf-cache"`.
+Tokenizer/model có thể vẫn cần tải từ Hugging Face nếu chưa có cache;
+cell chuẩn bị không tải weights model. CPU làm tokenize/packing; nếu notebook đã cấp
 GPU thì tài nguyên GPU vẫn tính phí trong thời gian chuẩn bị.
 
 ## Cell 4 — Chạy check
@@ -97,7 +101,7 @@ run("--train")
 Giữ kernel chạy. Function train nằm ngay trong notebook này; không có GPU job
 thứ hai hoặc `--detach`. Mỗi phiên yêu cầu dừng tại ranh giới optimizer step sau
 khoảng 18 giờ, rồi evaluate/save. Chạy lại Cell 5 khi phiên trước đã kết thúc để
-resume checkpoint hoàn chỉnh mới nhất. Giữ nguyên code/config, `RUN_ID` và Volume.
+resume checkpoint hoàn chỉnh mới nhất. Giữ nguyên code/config, `DATA_PATH`, `RUN_ID` và Volume.
 Nếu restart kernel, chạy lại Cell 1–4 trước Cell 5. Không chạy hai notebook train
 cùng `RUN_ID`. Chưa benchmark batch 16/VRAM trên A100 80GB trong bản bàn giao.
 

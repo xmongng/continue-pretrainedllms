@@ -36,7 +36,7 @@ import base64, hashlib, io, tempfile, zipfile
 from pathlib import Path
 ROOT = Path("/mnt/qwen3-cpt")
 assert ROOT.is_dir(), "Attach Volume qwen3-cpt at /mnt/qwen3-cpt first"
-PROJECT = ROOT / "project"
+PROJECT = ROOT / "project-volume-data-v1"
 payload = base64.b64decode({encoded!r})
 assert hashlib.sha256(payload).hexdigest() == {checksum!r}
 if not (PROJECT / "scripts/modal_notebook.py").is_file():
@@ -55,8 +55,9 @@ print("Project:", PROJECT)
     if len(sections) != 8:
         raise ValueError("README must contain the eight direct Modal Notebook cells")
     cells = [cell("markdown", "# Qwen3-1.7B — trực tiếp trên Modal Notebook\n\n"
-                  "Chọn 1 A100 80GB; gắn Volume `qwen3-cpt` tại `/mnt/qwen3-cpt` và "
-                  "Secret có key `HF_TOKEN`. Code đã được nhúng trong notebook; "
+                  "Chọn 1 A100 80GB; gắn Volume lưu code/cache/log tại `/mnt/qwen3-cpt`. "
+                  "Gắn Volume chứa dataset và điền `DATA_PATH` ở Cell 3. Không tải lại dataset. "
+                  "Code đã được nhúng trong notebook; "
                   "không cần code ZIP, GitHub, `modal setup` hoặc `modal run`. "
                   "Chạy Cell 1–5 theo thứ tự. Giữ kernel chạy khi train.\n")]
     for index, (heading, section) in enumerate(sections):
