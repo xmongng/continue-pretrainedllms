@@ -60,6 +60,25 @@ def configure(volume, run_id):
     return config
 
 
+def apply_gpu_profile(config, gpu_name, total_memory):
+    """Select a supported single-GPU profile and preserve effective batch size 32."""
+    gib = total_memory / 1024**3
+    training = config["training"]
+    if "H200" in gpu_name and gib >= 135:
+        training.update(
+            per_device_train_batch_size=32,
+            gradient_accumulation_steps=1,
+            per_device_eval_batch_size=8,
+            dataloader_num_workers=4,
+        )
+        return "h200-141gb-b32-ga1"
+    if "A100" in gpu_name and gib >= 79:
+        return "a100-80gb-b16-ga2"
+    raise RuntimeError(
+        f"Unsupported GPU: {gpu_name} ({gib:.1f} GiB). Use one A100 80GB or one H200 141GB."
+    )
+
+
 def prepare(volume, run_id, data_url=None, data_path=None):
     if (data_url is None) == (data_path is None):
         raise ValueError("Choose exactly one of --data-path or --data-url")
@@ -136,16 +155,28 @@ def train(volume, run_id):
     from llm_training.training.audit import save_json, utc_now
     from llm_training.training.train import create_trainer, run_training
 
-    if (
-        not torch.cuda.is_available()
-        or torch.cuda.device_count() != 1
-        or "A100" not in torch.cuda.get_device_name(0)
-        or torch.cuda.get_device_properties(0).total_memory < 79_000_000_000
-    ):
-        raise RuntimeError("Select one A100 80GB in the Modal Notebook compute settings")
+    if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
+        raise RuntimeError("Select exactly one supported GPU in the Modal Notebook settings")
     if not (volume / "prepared_notebook.json").is_file():
         raise RuntimeError("Run the data preparation cell first")
     config = configure(volume, run_id)
+    properties = torch.cuda.get_device_properties(0)
+    gpu_profile = apply_gpu_profile(config, torch.cuda.get_device_name(0), properties.total_memory)
+    print(
+        json.dumps(
+            {
+                "gpu": torch.cuda.get_device_name(0),
+                "gpu_memory_gib": properties.total_memory / 1024**3,
+                "gpu_profile": gpu_profile,
+                "per_device_train_batch_size": config["training"]["per_device_train_batch_size"],
+                "gradient_accumulation_steps": config["training"]["gradient_accumulation_steps"],
+                "effective_batch_sequences": config["training"]["per_device_train_batch_size"]
+                * config["training"]["gradient_accumulation_steps"],
+            },
+            indent=2,
+        ),
+        flush=True,
+    )
     output = Path(config["training"]["output_dir"])
     run_path = output / "run.json"
     prior = json.loads(run_path.read_text()) if run_path.exists() else {}

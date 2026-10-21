@@ -16,6 +16,37 @@ spec.loader.exec_module(runner)
 
 
 class NotebookTests(unittest.TestCase):
+    def test_gpu_profiles_preserve_effective_batch_size(self):
+        base = {
+            "training": {
+                "per_device_train_batch_size": 16,
+                "gradient_accumulation_steps": 2,
+                "per_device_eval_batch_size": 1,
+                "dataloader_num_workers": 0,
+            }
+        }
+        a100 = json.loads(json.dumps(base))
+        profile = runner.apply_gpu_profile(a100, "NVIDIA A100-SXM4-80GB", 80 * 1024**3)
+        self.assertEqual(profile, "a100-80gb-b16-ga2")
+        self.assertEqual(a100["training"]["per_device_train_batch_size"], 16)
+        self.assertEqual(a100["training"]["gradient_accumulation_steps"], 2)
+
+        h200 = json.loads(json.dumps(base))
+        profile = runner.apply_gpu_profile(h200, "NVIDIA H200", 141 * 1024**3)
+        self.assertEqual(profile, "h200-141gb-b32-ga1")
+        self.assertEqual(h200["training"]["per_device_train_batch_size"], 32)
+        self.assertEqual(h200["training"]["gradient_accumulation_steps"], 1)
+        self.assertEqual(h200["training"]["per_device_eval_batch_size"], 8)
+        self.assertEqual(h200["training"]["dataloader_num_workers"], 4)
+        self.assertEqual(
+            h200["training"]["per_device_train_batch_size"]
+            * h200["training"]["gradient_accumulation_steps"],
+            32,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "Unsupported GPU"):
+            runner.apply_gpu_profile(json.loads(json.dumps(base)), "NVIDIA L4", 24 * 1024**3)
+
     def test_dataset_url_is_converted_to_repo_id(self):
         self.assertEqual(
             runner.dataset_repository("https://huggingface.co/datasets/iraprp/chayqwen"),
