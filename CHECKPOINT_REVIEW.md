@@ -10,12 +10,16 @@ The observer reads those evaluation results from completed checkpoint states;
 it does not run additional GPU inference or access the test set.
 
 Every observed completed checkpoint gets `checkpoint_review/step-N.json`.
-Model snapshots are copied into `checkpoint_review/models` whenever validation
-sets a new best (including ties), every 5000 steps, and at epoch/final boundaries.
+Model snapshots are copied into `checkpoint_review/models` every 5000 steps
+and at epoch/final boundaries. New validation bests are reported without extra
+copies; Trainer retains the best full checkpoint separately.
 Snapshots include model/tokenizer files and SHA-256 checksums, but exclude
 optimizer state: use them for evaluation or SFT, not training resume.
-Archives are never rotated; with improving loss this can retain every checkpoint.
-Budget disk space accordingly (FP32 1.7B weights are roughly 6.8 GB per snapshot).
+Archives are never rotated. For the 85786-step run, expect 19 model snapshots
+if the watcher observes all milestones, plus Trainer's two full checkpoints.
+Budget roughly 180 GB plus dataset/cache and temporary checkpoint writes
+(FP32 1.7B weights are roughly 6.9 GB per snapshot, in decimal units).
+Existing archives from the previous policy are preserved, not deleted.
 
 `above_baseline` flags loss more than 0.02 above baseline.
 `review_validation_regression` flags three successive evaluations more than

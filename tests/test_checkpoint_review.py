@@ -19,21 +19,36 @@ class CheckpointReviewTests(unittest.TestCase):
     def test_archive_only_complete_checkpoint_and_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            checkpoint = root / 'checkpoint-1000'
+            checkpoint = root / 'checkpoint-5000'
             checkpoint.mkdir()
-            state = {'global_step': 1000, 'max_steps': 80000, 'epoch': 0.02,
-                     'log_history': [{'step': 1000, 'eval_loss': 1.9}]}
+            state = {'global_step': 5000, 'max_steps': 80000, 'epoch': 0.12,
+                     'log_history': [{'step': 5000, 'eval_loss': 1.9}]}
             (checkpoint / 'trainer_state.json').write_text(json.dumps(state))
             (checkpoint / 'model.safetensors').write_bytes(b'fixture weights')
             (checkpoint / 'optimizer.pt').write_bytes(b'not archived')
             review.poll(root, 5000, 0.02, 3)
-            self.assertFalse((root / 'checkpoint_review/step-1000.json').exists())
+            self.assertFalse((root / 'checkpoint_review/step-5000.json').exists())
             (checkpoint / 'COMPLETE').touch()
             review.poll(root, 5000, 0.02, 3)
-            archive = root / 'checkpoint_review/models/checkpoint-1000'
+            archive = root / 'checkpoint_review/models/checkpoint-5000'
             self.assertTrue((archive / 'ARCHIVE_COMPLETE.json').exists())
             self.assertFalse((archive / 'optimizer.pt').exists())
             review.poll(root, 5000, 0.02, 3)
+
+    def test_new_best_does_not_create_extra_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint = root / 'checkpoint-1000'
+            checkpoint.mkdir()
+            (checkpoint / 'COMPLETE').touch()
+            state = {'global_step': 1000, 'max_steps': 80000, 'epoch': 0.02,
+                     'log_history': [{'step': 1000, 'eval_loss': 1.9}]}
+            (checkpoint / 'trainer_state.json').write_text(json.dumps(state))
+            review.poll(root, 5000, 0.02, 3)
+            record = json.loads((root / 'checkpoint_review/step-1000.json').read_text())
+            self.assertTrue(record['is_best'])
+            self.assertFalse(record['model_archived'])
+            self.assertFalse((root / 'checkpoint_review/models/checkpoint-1000').exists())
 
 
 if __name__ == '__main__':

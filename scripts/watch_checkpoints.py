@@ -86,11 +86,11 @@ def poll(output, every, margin, patience):
         is_best = latest <= min(float(row['eval_loss']) for row in history)
         epoch = state.get('epoch')
         epoch_end = epoch is not None and abs(epoch - round(epoch)) < 1e-8
-        keep = is_best or step % every == 0 or epoch_end or step >= state['max_steps']
+        keep = step % every == 0 or epoch_end or step >= state['max_steps']
         if keep:
             archive_model(checkpoint, archives / checkpoint.name)
         record = {
-            'step': step, 'epoch': epoch, 'eval_loss': latest,
+            'step': step, 'epoch': epoch, 'eval_loss': latest, 'is_best': is_best,
             'baseline_loss': baseline, 'status': status, 'model_archived': keep,
             'archive': str(archives / checkpoint.name) if keep else None,
             'scope': 'domain validation only; general capability and SFT quality untested',
